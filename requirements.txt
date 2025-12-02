@@ -1,0 +1,7 @@
+# Python dependencies for Android Termux build environment
+setuptools 
+wheel 
+cython
+# For XML parsing and ASN.1 handling
+lxml 
+pyasn1
