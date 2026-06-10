@@ -1,239 +1,67 @@
-name: Generate and Release AOSP Keyboxes
+name: Generate AOSP Keyboxes (Highly Custom)
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'  # Run daily at UTC 00:00
+    inputs:
+      custom_device_id:
+        type: string
+        default: ""
+      custom_cn:
+        type: string
+        default: "AOSP"
+      custom_org:
+        type: string
+        default: "Android Open Source Project"
+      custom_country:
+        type: string
+        default: "US"
+      custom_start_date:
+        type: string
+        default: ""
+      root_validity_days:
+        type: string
+        default: "7300"
+      leaf_validity_days:
+        type: string
+        default: "3650"
 
 jobs:
-  generate-aosp-keyboxes:
+  build:
     runs-on: ubuntu-latest
-    env:
-      PYTHON_VERSION: 3.12
-      CI: true
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
+      uses: actions/checkout@v6
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
         pip install -r requirements.txt
+        sudo apt-get install -y faketime
 
-    - name: Verify OpenSSL installation
+    - name: Apply Custom Certificate Subject & Validity Days
       run: |
-        openssl version
-        which openssl
-        echo "OpenSSL version: $(openssl version)"
+        sed -i 's/AOSP Test/${{ inputs.custom_cn }}/g' aosp_keybox_generator.py
+        sed -i 's/O=Android Open Source Project/O=${{ inputs.custom_org }}/g' aosp_keybox_generator.py
+        sed -i 's/C=US/C=${{ inputs.custom_country }}/g' aosp_keybox_generator.py
+        sed -i 's/-days 7300/-days ${{ inputs.root_validity_days }}/g' aosp_keybox_generator.py
+        sed -i 's/-days 3650/-days ${{ inputs.leaf_validity_days }}/g' aosp_keybox_generator.py
 
-    - name: Generate AOSP keyboxes (1, 2, 3 chains)
+    - name: Generate Keyboxes
       run: |
-        echo "Starting AOSP keybox generation in CI mode..."
-        python aosp_keybox_generator.py || {
-          echo "Generation failed! Checking logs..."
-          echo ""
-          echo "=== Available files ==="
-          ls -la
-          echo ""
-          if ls *-aosp-chain*/generation.log 2>/dev/null; then
-            echo "=== Generation logs ==="
-            find . -name "generation.log" -exec echo "--- {} ---" \; -exec cat {} \;
-          else
-            echo "No generation logs found"
-          fi
-          exit 1
-        }
-        echo "Generation completed successfully"
-
-    - name: Verify generated folders
-      run: |
-        echo "Checking for generated folders..."
-        ls -la
-        FOLDERS=$(ls -1d *-aosp-chain* 2>/dev/null || true)
-        if [ -z "$FOLDERS" ]; then
-          echo "ERROR: No AOSP chain folders found!"
-          echo ""
-          echo "Contents of current directory:"
-          ls -la
-          echo ""
-          echo "Checking for error logs..."
-          if ls *-aosp-chain*/generation.log 2>/dev/null; then
-            find . -name "generation.log" -exec cat {} \;
-          fi
-          exit 1
+        if [ -n "${{ inputs.custom_start_date }}" ]; then
+          faketime "${{ inputs.custom_start_date }}" python aosp_keybox_generator.py
+        else
+          python aosp_keybox_generator.py
         fi
-        echo "Found folders:"
-        echo "$FOLDERS"
-        echo ""
-        echo "Folder details:"
-        for folder in $FOLDERS; do
-          echo "Folder: $folder:"
-          ls -lh "$folder" | grep -E '\.(pem|xml|log)$'
-        done
 
-    - name: Zip output folders (remove newcerts)
+    - name: Apply Custom DeviceID
+      if: ${{ inputs.custom_device_id != '' }}
       run: |
-        set -e
-        FOLDERS=$(ls -1d *-aosp-chain*)
-        echo "Creating zip archives (excluding newcerts)..."
-        for folder in $FOLDERS; do
-          echo "Processing $folder..."
-          
-          # Remove newcerts folder only
-          if [ -d "$folder/newcerts" ]; then
-            rm -rf "$folder/newcerts"
-            echo "✓ Removed $folder/newcerts"
-          fi
-          
-          echo "Zipping $folder..."
-          zip -r "${folder}.zip" "$folder"
-          ZIP_SIZE=$(du -h "${folder}.zip" | cut -f1)
-          echo "Created: ${folder}.zip ($ZIP_SIZE)"
-          
-          # Verify zip contents (no newcerts)
-          echo "Zip contents preview:"
-          unzip -l "${folder}.zip" | grep -E '\.(pem|xml|log|cnf)$' | head -10
-          echo ""
-        done
-        echo "All zip files created:"
-        ls -lh *-aosp-chain*.zip
+        sed -i 's/DeviceID="[^"]*"/DeviceID="${{ inputs.custom_device_id }}"/g' *-aosp-chain*/keybox.xml
 
-    - name: Set release tag and name
-      run: |
-        TAG="aosp-keybox-$(date -u +%Y%m%d-%H%M%S)"
-        NAME="AOSP Keybox Generator Release $(date -u +%Y-%m-%d)"
-        TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M%S UTC')"
-        OPENSSL_VER="$(openssl version)"
-        echo "REL_TAG=$TAG" >> $GITHUB_ENV
-        echo "REL_NAME=$NAME" >> $GITHUB_ENV
-        echo "GEN_TIMESTAMP=$TIMESTAMP" >> $GITHUB_ENV
-        echo "OPENSSL_VERSION=$OPENSSL_VER" >> $GITHUB_ENV
-        echo "Release tag: $TAG"
-        echo "Release name: $NAME"
-        echo "Generated: $TIMESTAMP"
-        echo "OpenSSL: $OPENSSL_VER"
-
-    - name: Generate release notes
-      run: |
-        cat > release_notes.md << 'EOF'
-        ## AOSP Keybox Generator Release
-        
-        **IMPORTANT: Template Code for Testing Only**
-        
-        This release contains AOSP test keyboxes generated for educational and development purposes.
-        
-        ### Contents
-        - *-aosp-chain1.zip: 1-certificate chain (leaf only)
-        - *-aosp-chain2.zip: 2-certificate chain (leaf + intermediate)
-        - *-aosp-chain3.zip: 3-certificate chain (leaf + intermediate + root)
-        
-        ### Certificate Details
-        - EC Keys: NIST P-256 (prime256v1)
-        - RSA Keys: 2048-bit
-        - Subjects: AOSP Test subjects (non-Google)
-        - Validity: 10 years (leaf), 20 years (CA)
-        
-        ### Important Notes
-        - These are NOT real device keyboxes:
-          - Not signed by Google
-          - Will fail Google Play Integrity API
-          - Use AOSP test certificate subjects
-          - For educational/testing purposes only
-          - Do not use in production environments
-        
-        ### File Structure
-        Each zip contains:
-        - keybox.xml: Main keybox file
-        - ecPrivateKey.pem: EC private key
-        - rsaPrivateKey.pem: RSA private key
-        - ecCert_*.pem: EC certificate chain
-        - rsaCert_*.pem: RSA certificate chain
-        - generation.log: Generation details
-        - openssl_aosp.cnf: OpenSSL config used
-        
-        ### ASN.1 KeyDescription
-        Includes AOSP KeyDescription structure (OID 1.3.6.1.4.1.11129.2.1.17) with:
-        - Attestation Version: 4 (KeyMint)
-        - Security Level: 0 (Software)
-        - Proper AuthorizationList encoding
-        
-        ---
-        
-        EOF
-        
-        # Append dynamic content
-        echo "Generated: ${{ env.GEN_TIMESTAMP }}" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "Python: ${{ env.PYTHON_VERSION }}" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "OpenSSL: ${{ env.OPENSSL_VERSION }}" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "Runner: ubuntu-latest" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "Workflow: [View workflow run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> release_notes.md
-        
-        echo "Release notes preview:"
-        cat release_notes.md
-
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v6
       with:
-        tag_name: ${{ env.REL_TAG }}
-        name: ${{ env.REL_NAME }}
-        body_path: release_notes.md
-        files: |
-          *-aosp-chain*.zip
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Upload generation logs as artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: generation-logs-${{ env.REL_TAG }}
+        name: AOSP-Keyboxes-Custom-Pack
         path: |
-          *-aosp-chain*/generation.log
-        retention-days: 30
-
-    - name: Cleanup workspace
-      if: always()
-      run: |
-        echo "Cleaning up workspace..."
-        rm -rf *-aosp-chain*
-        rm -f *-aosp-chain*.zip
-        rm -f release_notes.md
-        echo "Cleanup complete"
-
-    - name: Summary
-      if: success()
-      run: |
-        echo "AOSP Keybox Generation Successful" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Release: ${{ env.REL_NAME }}" >> $GITHUB_STEP_SUMMARY
-        echo "Tag: ${{ env.REL_TAG }}" >> $GITHUB_STEP_SUMMARY
-        echo "Generated: ${{ env.GEN_TIMESTAMP }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Release Assets" >> $GITHUB_STEP_SUMMARY
-        echo "- 20*-aosp-chain1.zip - 1-certificate chain" >> $GITHUB_STEP_SUMMARY
-        echo "- 20*-aosp-chain2.zip - 2-certificate chain" >> $GITHUB_STEP_SUMMARY
-        echo "- 20*-aosp-chain3.zip - 3-certificate chain" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Template code - for testing only" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "View Release: https://github.com/${{ github.repository }}/releases/tag/${{ env.REL_TAG }}" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Technical Details" >> $GITHUB_STEP_SUMMARY
-        echo "- OpenSSL: ${{ env.OPENSSL_VERSION }}" >> $GITHUB_STEP_SUMMARY
-        echo "- Python: ${{ env.PYTHON_VERSION }}" >> $GITHUB_STEP_SUMMARY
-        echo "- Runner: ubuntu-latest" >> $GITHUB_STEP_SUMMARY
+          *-aosp-chain*
