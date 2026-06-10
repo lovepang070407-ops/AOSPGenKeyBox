@@ -40,28 +40,28 @@ keyUsage = digitalSignature,keyEncipherment
 subjectKeyIdentifier = hash
 
 [ v3_root ]
-basicConstraints = critical,CA:TRUE,pathlen:1
+basicConstraints = critical,CA:TRUE
 keyUsage         = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 
 [ v3_intermediate ]
-basicConstraints = critical,CA:TRUE,pathlen:0
+basicConstraints = critical,CA:TRUE
 keyUsage         = critical,keyCertSign,cRLSign
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 
 [ v3_leaf_ec ]
-basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyCertSign
 extendedKeyUsage = clientAuth
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 1.3.6.1.4.1.11129.2.1.17 = DER:KEYDESC_HEX_PLACEHOLDER
 
 [ v3_leaf_rsa ]
-basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature,keyEncipherment
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyEncipherment,keyCertSign
 extendedKeyUsage = clientAuth
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
