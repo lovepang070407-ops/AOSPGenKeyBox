@@ -52,8 +52,8 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
 
 [ v3_leaf_ec ]
-basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyCertSign
 extendedKeyUsage = clientAuth
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer
