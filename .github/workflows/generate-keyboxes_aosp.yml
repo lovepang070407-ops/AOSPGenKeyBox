@@ -1,27 +1,56 @@
-name: Generate AOSP Keyboxes (Highly Custom)
+name: Generate AOSP Keyboxes (Advanced Custom)
 
 on:
   workflow_dispatch:
     inputs:
       custom_device_id:
+        description: "1. 自定义 DeviceID (留空则随机生成)"
+        required: false
         type: string
         default: ""
-      custom_cn:
+      custom_start_date:
+        description: "2. 伪装起始时间 (例如: '2024-01-01 12:00:00'，留空则用当前系统时间)"
+        required: false
         type: string
-        default: "AOSP"
+        default: ""
       custom_org:
+        description: "3. 自定义组织/公司 O (最大 64 字符)"
+        required: false
         type: string
-        default: "Android Open Source Project"
+        default: "Google LLC"
       custom_country:
+        description: "4. 自定义国家 C (两位大写，例如：US)"
+        required: false
         type: string
         default: "US"
-      custom_start_date:
+      custom_root_cn:
+        description: "5. 【根证书 CN】(最大 64 字符)"
+        required: false
         type: string
-        default: ""
+        default: "Android Keystore Software Attestation Root"
+      custom_int_cn:
+        description: "6. 【中间证书 CA CN】(最大 64 字符)"
+        required: false
+        type: string
+        default: "Android Keystore Software Attestation CA"
+      custom_leaf_ec_cn:
+        description: "7. 【终端 EC 证书 CN】(最大 64 字符)"
+        required: false
+        type: string
+        default: "Android Keystore Software Attestation Key EC"
+      custom_leaf_rsa_cn:
+        description: "8. 【终端 RSA 证书 CN】(最大 64 字符)"
+        required: false
+        type: string
+        default: "Android Keystore Software Attestation Key RSA"
       root_validity_days:
+        description: "9. Root 证书有效天数"
+        required: false
         type: string
         default: "7300"
       leaf_validity_days:
+        description: "10. 中间和终端证书有效天数"
+        required: false
         type: string
         default: "3650"
 
@@ -33,31 +62,91 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v6
 
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.10'
+
     - name: Install dependencies
       run: |
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
-        sudo apt-get install -y faketime
 
-    - name: Apply Custom Certificate Subject & Validity Days
+    - name: Install OpenSSL and faketime
       run: |
-        sed -i 's/AOSP Test/${{ inputs.custom_cn }}/g' aosp_keybox_generator.py
-        sed -i 's/O=Android Open Source Project/O=${{ inputs.custom_org }}/g' aosp_keybox_generator.py
-        sed -i 's/C=US/C=${{ inputs.custom_country }}/g' aosp_keybox_generator.py
-        sed -i 's/-days 7300/-days ${{ inputs.root_validity_days }}/g' aosp_keybox_generator.py
-        sed -i 's/-days 3650/-days ${{ inputs.leaf_validity_days }}/g' aosp_keybox_generator.py
+        sudo apt-get update
+        sudo apt-get install -y openssl faketime
+
+    - name: Apply Custom Certificate Subject & Validity Days (Modify Python Script)
+      env:
+        ROOT_CN: ${{ inputs.custom_root_cn }}
+        INT_CN: ${{ inputs.custom_int_cn }}
+        LEAF_EC_CN: ${{ inputs.custom_leaf_ec_cn }}
+        LEAF_RSA_CN: ${{ inputs.custom_leaf_rsa_cn }}
+        CUSTOM_ORG: ${{ inputs.custom_org }}
+        CUSTOM_COUNTRY: ${{ inputs.custom_country }}
+        ROOT_DAYS: ${{ inputs.root_validity_days }}
+        LEAF_DAYS: ${{ inputs.leaf_validity_days }}
+      run: |
+        python -c "
+        import os
+        path = 'aosp_keybox_generator.py'
+        if not os.path.exists(path):
+            print('未找到 aosp_keybox_generator.py')
+            exit(0)
+            
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            
+        # 映射需要替换的内容（自动安全截断，防止超出 OpenSSL 硬性上限）
+        replacements = {
+            'AOSP Test Attestation Root': os.environ['ROOT_CN'][:64],
+            'AOSP Test OEM Attestation CA': os.environ['INT_CN'][:64],
+            'AOSP Test Keystore Attestation Key EC': os.environ['LEAF_EC_CN'][:64],
+            'AOSP Test Keystore Attestation Key RSA': os.environ['LEAF_RSA_CN'][:64],
+            'O=Android Open Source Project': f'O={os.environ[\"CUSTOM_ORG\"][:64]}',
+            'C=US': f'C={os.environ[\"CUSTOM_COUNTRY\"][:2]}',
+            '-days 7300': f'-days {os.environ[\"ROOT_DAYS\"]}',
+            '-days 3650': f'-days {os.environ[\"LEAF_DAYS\"]}'
+        }
+        
+        for old, new in replacements.items():
+            content = content.replace(old, new)
+            
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print('aosp_keybox_generator.py 配置深度自定义应用成功！')
+        "
 
     - name: Generate Keyboxes
+      env:
+        CI: "true"
+        START_DATE: ${{ inputs.custom_start_date }}
       run: |
-        if [ -n "${{ inputs.custom_start_date }}" ]; then
-          faketime "${{ inputs.custom_start_date }}" python aosp_keybox_generator.py
+        if [ -n "$START_DATE" ]; then
+          echo "正在以伪装时间运行: $START_DATE"
+          faketime "$START_DATE" python aosp_keybox_generator.py
         else
+          echo "使用当前系统时间运行"
           python aosp_keybox_generator.py
         fi
 
     - name: Apply Custom DeviceID
-      if: ${{ inputs.custom_device_id != '' }}
+      env:
+        CUSTOM_DEVICE_ID: ${{ inputs.custom_device_id }}
       run: |
-        sed -i 's/DeviceID="[^"]*"/DeviceID="${{ inputs.custom_device_id }}"/g' *-aosp-chain*/keybox.xml
+        python -c "
+        import os, glob, re
+        custom_id = os.environ.get('CUSTOM_DEVICE_ID', '').strip()
+        if custom_id:
+            for xml_file in glob.glob('*-aosp-chain*/keybox.xml'):
+                with open(xml_file, 'r+', encoding='utf-8') as f:
+                    content = f.read()
+                    f.seek(0)
+                    f.write(re.sub(r'DeviceID=\"[^\"]+\"', f'DeviceID=\"{custom_id}\"', content))
+                    f.truncate()
+                print(f'成功将 DeviceID 替换为: {custom_id}')
+        "
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v6
